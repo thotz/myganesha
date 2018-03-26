@@ -166,7 +166,9 @@ static fsal_status_t read_dirents(struct fsal_obj_handle *dir_hdl,
 	int rc = 0;
 	fsal_status_t status = { ERR_FSAL_NO_ERROR, 0 };
 	struct glfs_fd *glfd = NULL;
-	long offset = 0;
+        off_t seekloc = 0;
+        fsal_cookie_t cookie;
+        bool skip_first;
 	struct dirent *pde = NULL;
 	struct glusterfs_export *glfs_export =
 	    container_of(op_ctx->fsal_export, struct glusterfs_export, export);
@@ -200,7 +202,17 @@ static fsal_status_t read_dirents(struct fsal_obj_handle *dir_hdl,
 		return gluster2fsal_error(errno);
 
 	if (whence != NULL)
-		offset = *whence;
+               seekloc = (off_t) *whence;
+        cookie = seekloc;
+
+       /* If we don't start from beginning skip an entry */
+       skip_first = cookie != 0;
+
+       if (cookie == 0) {
+               /* Return a non-zero cookie for the first file. */
+               cookie = FIRST_COOKIE;
+       }
+
 
 	glfs_seekdir(glfd, offset);
 
@@ -237,7 +249,23 @@ static fsal_status_t read_dirents(struct fsal_obj_handle *dir_hdl,
 		/* skip . and .. */
 		if ((strcmp(de.d_name, ".") == 0)
 		    || (strcmp(de.d_name, "..") == 0)) {
-			continue;
+#ifdef USE_GLUSTER_XREADDIRPLUS
+                  if (xstat) {
+                               glfs_free(xstat);
+                               xstat = NULL;
+                       }
+#endif
+
+                       goto skip;
+               }
+
+                /* If this is the first dirent found after a restarted readdir,
+                * we actually just fetched the last dirent from the previous
+                * call so we skip it.
+                */
+                if (skip_first) {
+                        skip_first = false;
+                        goto skip;
 		}
 		fsal_prepare_attrs(&attrs, attrmask);
 
@@ -278,14 +306,15 @@ static fsal_status_t read_dirents(struct fsal_obj_handle *dir_hdl,
 			goto out;
 		}
 #endif
-		cb_rc = cb(de.d_name, obj, &attrs,
-			   dir_state, glfs_telldir(glfd));
+		cb_rc = cb(de.d_name, obj, &attrs, dir_state, cookie);
 
 		fsal_release_attrs(&attrs);
 
 		/* Read ahead not supported by this FSAL. */
 		if (cb_rc >= DIR_READAHEAD)
 			goto out;
+skip:
+                cookie = (fsal_cookie_t) glfs_telldir(glfd);
 	}
 
  out:
