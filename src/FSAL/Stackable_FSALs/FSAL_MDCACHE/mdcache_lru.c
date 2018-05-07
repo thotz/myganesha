@@ -1267,6 +1267,9 @@ lru_run(struct fridgethr_context *ctx)
 		   without being woken, we assume we aren't racing
 		   against the impossible. */
 		lru_state.futility = 0;
+		if (lru_state.futility >= mdcache_param.futility_count)
+			LogInfo(COMPONENT_CACHE_INODE_LRU,
+				"Leaving FD futility mode.");
 	}
 
 	LogFullDebug(COMPONENT_CACHE_INODE_LRU, "lru entries: %" PRIu64,
@@ -1341,10 +1344,10 @@ lru_run(struct fridgethr_context *ctx)
 			       lru_state.fds_hiwat) *
 			      mdcache_param.required_progress) /
 			     100)))) {
-			if (++lru_state.futility >
+			if (++lru_state.futility == 
 			    mdcache_param.futility_count) {
-				LogCrit(COMPONENT_CACHE_INODE_LRU,
-					"Futility count exceeded.  The LRU thread is unable to make progress in reclaiming FDs.  Disabling FD cache.");
+				LogWarn(COMPONENT_CACHE_INODE_LRU,
+					"Futility count exceeded.  Client load is opening FDs faster than the LRU thread can close them.");
 				lru_state.caching_fds = false;
 			}
 		}
