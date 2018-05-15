@@ -1,7 +1,7 @@
 /*
  * vim:noexpandtab:shiftwidth=8:tabstop=8:
  *
- * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates.
+ * Copyright 2015-2018 Red Hat, Inc. and/or its affiliates.
  * Author: Daniel Gryniewicz <dang@redhat.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -44,6 +44,14 @@
 typedef struct mdcache_fsal_obj_handle mdcache_entry_t;
 
 #define MDC_UNEXPORT 1
+
+/**
+ * @brief Reason an entry is being inserted/looked up
+ */
+typedef enum {
+	MDC_REASON_DEFAULT,	/**< Default insertion */
+	MDC_REASON_SCAN		/**< Is being inserted by a scan */
+} mdc_reason_t;
 
 /*
  * MDCACHE internal export
@@ -462,8 +470,13 @@ fsal_status_t mdcache_new_entry(struct mdcache_fsal_export *export,
 				struct attrlist *attrs_out,
 				bool new_directory,
 				mdcache_entry_t **entry,
-				struct state_t *state);
-fsal_status_t mdcache_find_keyed(mdcache_key_t *key, mdcache_entry_t **entry);
+				struct state_t *state,
+				mdc_reason_t reason);
+fsal_status_t mdcache_find_keyed_reason(mdcache_key_t *key,
+					mdcache_entry_t **entry,
+					mdc_reason_t reason);
+#define mdcache_find_keyed(key, entry) mdcache_find_keyed_reason((key), \
+					(entry), MDC_REASON_DEFAULT)
 fsal_status_t mdcache_locate_host(struct gsh_buffdesc *fh_desc,
 				  struct mdcache_fsal_export *export,
 				  mdcache_entry_t **entry,

@@ -214,7 +214,7 @@ static fsal_status_t read_dirents(struct fsal_obj_handle *dir_hdl,
        }
 
 
-	glfs_seekdir(glfd, offset);
+	glfs_seekdir(glfd, seekloc);
 
 	while (!(*eof)) {
 		struct dirent de;

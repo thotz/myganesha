@@ -1,7 +1,7 @@
 /*
  * vim:noexpandtab:shiftwidth=8:tabstop=8:
  *
- * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates.
+ * Copyright 2015-2018 Red Hat, Inc. and/or its affiliates.
  * Author: Daniel Gryniewicz <dang@redhat.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -167,13 +167,15 @@ fsal_status_t get_optional_attrs(struct fsal_obj_handle *obj_hdl,
  * @param[in] export The mdcache export used by the handle.
  * @param[in] sub_handle The handle used by the subfsal.
  * @param[in] fs The filesystem of the new handle.
+ * @param[in] reason The reason the entry is being inserted
  *
  * @return The new handle, or NULL if the unexport in progress.
  */
 static mdcache_entry_t *mdcache_alloc_handle(
 		struct mdcache_fsal_export *export,
 		struct fsal_obj_handle *sub_handle,
-		struct fsal_filesystem *fs)
+		struct fsal_filesystem *fs,
+		mdc_reason_t reason)
 {
 	mdcache_entry_t *result;
 	fsal_status_t status;
@@ -243,7 +245,7 @@ static mdcache_entry_t *mdcache_alloc_handle(
 		return NULL;
 	}
 
-	mdcache_lru_insert(result);
+	mdcache_lru_insert(result, reason);
 
 	return result;
 }
@@ -586,7 +588,8 @@ mdcache_new_entry(struct mdcache_fsal_export *export,
 		  struct attrlist *attrs_out,
 		  bool new_directory,
 		  mdcache_entry_t **entry,
-		  struct state_t *state)
+		  struct state_t *state,
+		  mdc_reason_t reason)
 {
 	fsal_status_t status;
 	mdcache_entry_t *oentry, *nentry = NULL;
@@ -631,7 +634,8 @@ mdcache_new_entry(struct mdcache_fsal_export *export,
 	/* We did not find the object.  Pull an entry off the LRU. The entry
 	 * will already be mapped.
 	 */
-	nentry = mdcache_alloc_handle(export, sub_handle, sub_handle->fs);
+	nentry = mdcache_alloc_handle(export, sub_handle, sub_handle->fs,
+				      reason);
 
 	if (nentry == NULL) {
 		/* We didn't get an entry because of unexport in progress,
@@ -886,13 +890,15 @@ int display_mdcache_key(struct display_buffer *dspbuf, mdcache_key_t *key)
  *
  * @param[in] key	Cache key to use for lookup
  * @param[out] entry	Entry, if found
+ * @param[in] reason	The reason for the lookup
  *
- * @note This returns an INITIAL ref'd entry on success
+ * @note This returns ref'd entry on success, INITIAL if @a reason is not SCAN
  *
  * @return Status
  */
 fsal_status_t
-mdcache_find_keyed(mdcache_key_t *key, mdcache_entry_t **entry)
+mdcache_find_keyed_reason(mdcache_key_t *key, mdcache_entry_t **entry,
+			  mdc_reason_t reason)
 {
 	cih_latch_t latch;
 
@@ -919,7 +925,8 @@ mdcache_find_keyed(mdcache_key_t *key, mdcache_entry_t **entry)
 		fsal_status_t status;
 
 		/* Initial Ref on entry */
-		status = mdcache_lru_ref(*entry, LRU_REQ_INITIAL);
+		status = mdcache_lru_ref(*entry, (reason != MDC_REASON_SCAN) ?
+					 LRU_REQ_INITIAL : LRU_FLAG_NONE);
 		/* Release the subtree hash table lock */
 		cih_hash_release(&latch);
 		if (FSAL_IS_ERROR(status)) {
@@ -1037,7 +1044,7 @@ mdcache_locate_host(struct gsh_buffdesc *fh_desc,
 	}
 
 	status = mdcache_new_entry(export, sub_handle, &attrs, attrs_out,
-				   false, entry, NULL);
+				   false, entry, NULL, MDC_REASON_DEFAULT);
 
 	fsal_release_attrs(&attrs);
 
@@ -1091,7 +1098,7 @@ fsal_status_t mdc_add_cache(mdcache_entry_t *mdc_parent,
 	LogFullDebug(COMPONENT_CACHE_INODE, "Creating entry for %s", name);
 
 	status = mdcache_new_entry(export, sub_handle, attrs_in, NULL,
-				   false, &new_entry, NULL);
+				   false, &new_entry, NULL, MDC_REASON_DEFAULT);
 
 	if (FSAL_IS_ERROR(status))
 		return status;
@@ -1834,7 +1841,8 @@ mdc_readdir_uncached_cb(const char *name, struct fsal_obj_handle *sub_handle,
 	/* This is in the middle of a subcall. Do a supercall */
 	supercall_raw(state->export,
 		status = mdcache_new_entry(state->export, sub_handle, attrs,
-					   NULL, false, &new_entry, NULL)
+					   NULL, false, &new_entry, NULL,
+					   MDC_REASON_SCAN)
 	);
 
 	if (FSAL_IS_ERROR(status)) {
@@ -2351,7 +2359,7 @@ mdc_readdir_chunk_object(const char *name, struct fsal_obj_handle *sub_handle,
 		     name, cookie, sub_handle);
 
 	status = mdcache_new_entry(export, sub_handle, attrs_in, NULL,
-				   false, &new_entry, NULL);
+				   false, &new_entry, NULL, MDC_REASON_SCAN);
 
 	if (FSAL_IS_ERROR(status)) {
 		*state->status = status;
@@ -3149,7 +3157,8 @@ again:
 		}
 
 		/* Get actual entry using the dirent ckey */
-		status = mdcache_find_keyed(&dirent->ckey, &entry);
+		status = mdcache_find_keyed_reason(&dirent->ckey, &entry,
+						   MDC_REASON_SCAN);
 
 		if (FSAL_IS_ERROR(status)) {
 			/* Failed using ckey, do full lookup. */
